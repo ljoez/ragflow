@@ -24,20 +24,20 @@ from .modules.document import Document
 
 
 class RAGFlow:
-    def __init__(self, user_key, base_url, version='v1'):
+    def __init__(self, api_key, base_url, version='v1'):
         """
         api_url: http://<host_address>/api/v1
         """
-        self.user_key = user_key
+        self.user_key = api_key
         self.api_url = f"{base_url}/api/{version}"
         self.authorization_header = {"Authorization": "{} {}".format("Bearer", self.user_key)}
 
-    def post(self, path, json, stream=False):
-        res = requests.post(url=self.api_url + path, json=json, headers=self.authorization_header, stream=stream)
+    def post(self, path, json=None, stream=False, files=None):
+        res = requests.post(url=self.api_url + path, json=json, headers=self.authorization_header, stream=stream,files=files)
         return res
 
-    def get(self, path, params=None):
-        res = requests.get(url=self.api_url + path, params=params, headers=self.authorization_header)
+    def get(self, path, params=None, json=None):
+        res = requests.get(url=self.api_url + path, params=params, headers=self.authorization_header,json=json)
         return res
 
     def delete(self, path, json):
@@ -49,17 +49,13 @@ class RAGFlow:
         return res
 
     def create_dataset(self, name: str, avatar: str = "", description: str = "", language: str = "English",
-                       permission: str = "me",
-                       document_count: int = 0, chunk_count: int = 0, parse_method: str = "naive",
+                       permission: str = "me",chunk_method: str = "naive",
                        parser_config: DataSet.ParserConfig = None) -> DataSet:
-        if parser_config is None:
-            parser_config = DataSet.ParserConfig(self, {"chunk_token_count": 128, "layout_recognize": True,
-                                                        "delimiter": "\n!?。；！？", "task_page_size": 12})
-        parser_config = parser_config.to_json()
-        res = self.post("/dataset",
+        if parser_config:
+            parser_config = parser_config.to_json()
+        res = self.post("/datasets",
                         {"name": name, "avatar": avatar, "description": description, "language": language,
-                         "permission": permission,
-                         "document_count": document_count, "chunk_count": chunk_count, "parse_method": parse_method,
+                         "permission": permission, "chunk_method": chunk_method,
                          "parser_config": parser_config
                          }
                         )
@@ -68,16 +64,22 @@ class RAGFlow:
             return DataSet(self, res["data"])
         raise Exception(res["message"])
 
-    def delete_datasets(self, ids: List[str] = None, names: List[str] = None):
-        res = self.delete("/dataset",{"ids": ids, "names": names})
+    def delete_datasets(self, ids: List[str]):
+        res = self.delete("/datasets",{"ids": ids})
         res=res.json()
         if res.get("code") != 0:
             raise Exception(res["message"])
 
+    def get_dataset(self,name: str):
+        _list = self.list_datasets(name=name)
+        if len(_list) > 0:
+            return _list[0]
+        raise Exception("Dataset %s not found" % name)
+
     def list_datasets(self, page: int = 1, page_size: int = 1024, orderby: str = "create_time", desc: bool = True,
                       id: str = None, name: str = None) -> \
             List[DataSet]:
-        res = self.get("/dataset",
+        res = self.get("/datasets",
                        {"page": page, "page_size": page_size, "orderby": orderby, "desc": desc, "id": id, "name": name})
         res = res.json()
         result_list = []
@@ -87,11 +89,11 @@ class RAGFlow:
             return result_list
         raise Exception(res["message"])
 
-    def create_chat(self, name: str = "assistant", avatar: str = "path", knowledgebases: List[DataSet] = [],
+    def create_chat(self, name: str, avatar: str = "", dataset_ids: List[str] = [],
                          llm: Chat.LLM = None, prompt: Chat.Prompt = None) -> Chat:
-        datasets = []
-        for dataset in knowledgebases:
-            datasets.append(dataset.to_json())
+        dataset_list = []
+        for id in dataset_ids:
+            dataset_list.append(id)
 
         if llm is None:
             llm = Chat.LLM(self, {"model_name": None,
@@ -124,17 +126,17 @@ class RAGFlow:
 
         temp_dict = {"name": name,
                      "avatar": avatar,
-                     "knowledgebases": datasets,
+                     "dataset_ids": dataset_list,
                      "llm": llm.to_json(),
                      "prompt": prompt.to_json()}
-        res = self.post("/chat", temp_dict)
+        res = self.post("/chats", temp_dict)
         res = res.json()
         if res.get("code") == 0:
             return Chat(self, res["data"])
         raise Exception(res["message"])
 
     def delete_chats(self,ids: List[str] = None,names: List[str] = None ) -> bool:
-        res = self.delete('/chat',
+        res = self.delete('/chats',
                       {"ids":ids, "names":names})
         res = res.json()
         if res.get("code") != 0:
@@ -142,7 +144,7 @@ class RAGFlow:
 
     def list_chats(self, page: int = 1, page_size: int = 1024, orderby: str = "create_time", desc: bool = True,
                       id: str = None, name: str = None) -> List[Chat]:
-        res = self.get("/chat",{"page": page, "page_size": page_size, "orderby": orderby, "desc": desc, "id": id, "name": name})
+        res = self.get("/chats",{"page": page, "page_size": page_size, "orderby": orderby, "desc": desc, "id": id, "name": name})
         res = res.json()
         result_list = []
         if res.get("code") == 0:
@@ -151,130 +153,29 @@ class RAGFlow:
             return result_list
         raise Exception(res["message"])
 
-    def create_document(self, ds: DataSet, name: str, blob: bytes) -> bool:
-        url = f"/doc/dataset/{ds.id}/documents/upload"
-        files = {
-            'file': (name, blob)
-        }
-        headers = {
-            'Authorization': f"Bearer {ds.rag.user_key}"
-        }
 
-        response = requests.post(self.api_url + url, files=files,
-                                 headers=headers)
-
-        if response.status_code == 200 and response.json().get('retmsg') == 'success':
-            return True
-        else:
-            raise Exception(f"Upload failed: {response.json().get('retmsg')}")
-
-        return False
-
-    def get_document(self, id: str = None, name: str = None) -> Document:
-        res = self.get("/doc/infos", {"id": id, "name": name})
-        res = res.json()
-        if res.get("retmsg") == "success":
-            return Document(self, res['data'])
-        raise Exception(res["retmsg"])
-
-    def async_parse_documents(self, doc_ids):
-        """
-        Asynchronously start parsing multiple documents without waiting for completion.
-
-        :param doc_ids: A list containing multiple document IDs.
-        """
-        try:
-            if not doc_ids or not isinstance(doc_ids, list):
-                raise ValueError("doc_ids must be a non-empty list of document IDs")
-
-            data = {"document_ids": doc_ids, "run": 1}
-
-            res = self.post(f'/doc/run', data)
-
-            if res.status_code != 200:
-                raise Exception(f"Failed to start async parsing for documents: {res.text}")
-
-            print(f"Async parsing started successfully for documents: {doc_ids}")
-
-        except Exception as e:
-            print(f"Error occurred during async parsing for documents: {str(e)}")
-            raise
-
-    def async_cancel_parse_documents(self, doc_ids):
-        """
-        Cancel the asynchronous parsing of multiple documents.
-
-        :param doc_ids: A list containing multiple document IDs.
-        """
-        try:
-            if not doc_ids or not isinstance(doc_ids, list):
-                raise ValueError("doc_ids must be a non-empty list of document IDs")
-            data = {"document_ids": doc_ids, "run": 2}
-            res = self.post(f'/doc/run', data)
-
-            if res.status_code != 200:
-                raise Exception(f"Failed to cancel async parsing for documents: {res.text}")
-
-            print(f"Async parsing canceled successfully for documents: {doc_ids}")
-
-        except Exception as e:
-            print(f"Error occurred during canceling parsing for documents: {str(e)}")
-            raise
-
-    def retrieval(self,
-                  question,
-                  datasets=None,
-                  documents=None,
-                  offset=0,
-                  limit=6,
-                  similarity_threshold=0.1,
-                  vector_similarity_weight=0.3,
-                  top_k=1024):
-        """
-        Perform document retrieval based on the given parameters.
-
-        :param question: The query question.
-        :param datasets: A list of datasets (optional, as documents may be provided directly).
-        :param documents: A list of documents (if specific documents are provided).
-        :param offset: Offset for the retrieval results.
-        :param limit: Maximum number of retrieval results.
-        :param similarity_threshold: Similarity threshold.
-        :param vector_similarity_weight: Weight of vector similarity.
-        :param top_k: Number of top most similar documents to consider (for pre-filtering or ranking).
-
-        Note: This is a hypothetical implementation and may need adjustments based on the actual backend service API.
-        """
-        try:
-            data = {
-                "question": question,
-                "datasets": datasets if datasets is not None else [],
-                "documents": [doc.id if hasattr(doc, 'id') else doc for doc in
-                              documents] if documents is not None else [],
+    def retrieve(self, dataset_ids, document_ids=None, question="", offset=1, limit=1024, similarity_threshold=0.2, vector_similarity_weight=0.3, top_k=1024, rerank_id:str=None, keyword:bool=False, ):
+            if document_ids is None:
+                document_ids = []
+            data_json ={
                 "offset": offset,
                 "limit": limit,
                 "similarity_threshold": similarity_threshold,
                 "vector_similarity_weight": vector_similarity_weight,
                 "top_k": top_k,
-                "knowledgebase_id": datasets,
+                "rerank_id": rerank_id,
+                "keyword": keyword,
+                "question": question,
+                "datasets": dataset_ids,
+                "documents": document_ids
             }
-
             # Send a POST request to the backend service (using requests library as an example, actual implementation may vary)
-            res = self.post(f'/doc/retrieval_test', data)
-
-            # Check the response status code
-            if res.status_code == 200:
-                res_data = res.json()
-                if res_data.get("retmsg") == "success":
-                    chunks = []
-                    for chunk_data in res_data["data"].get("chunks", []):
-                        chunk = Chunk(self, chunk_data)
-                        chunks.append(chunk)
-                    return chunks
-                else:
-                    raise Exception(f"Error fetching chunks: {res_data.get('retmsg')}")
-            else:
-                raise Exception(f"API request failed with status code {res.status_code}")
-
-        except Exception as e:
-            print(f"An error occurred during retrieval: {e}")
-            raise
+            res = self.post(f'/retrieval',json=data_json)
+            res = res.json()
+            if res.get("code") ==0:
+                chunks=[]
+                for chunk_data in res["data"].get("chunks"):
+                    chunk=Chunk(self,chunk_data)
+                    chunks.append(chunk)
+                return chunks
+            raise Exception(res.get("message"))

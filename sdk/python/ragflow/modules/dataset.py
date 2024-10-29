@@ -1,5 +1,7 @@
 from typing import Optional, List
 
+from transformers.models.bloom.modeling_bloom import bloom_gelu_back
+
 from .document import Document
 
 from .base import Base
@@ -8,10 +10,6 @@ from .base import Base
 class DataSet(Base):
     class ParserConfig(Base):
         def __init__(self, rag, res_dict):
-            self.chunk_token_count = 128
-            self.layout_recognize = True
-            self.delimiter = '\n!?。；！？'
-            self.task_page_size = 12
             super().__init__(rag, res_dict)
 
     def __init__(self, rag, res_dict):
@@ -25,7 +23,7 @@ class DataSet(Base):
         self.permission = "me"
         self.document_count = 0
         self.chunk_count = 0
-        self.parse_method = "naive"
+        self.chunk_method = "naive"
         self.parser_config = None
         for k in list(res_dict.keys()):
             if k not in self.__dict__:
@@ -33,45 +31,49 @@ class DataSet(Base):
         super().__init__(rag, res_dict)
 
     def update(self, update_message: dict):
-        res = self.put(f'/dataset/{self.id}',
+        res = self.put(f'/datasets/{self.id}',
                         update_message)
         res = res.json()
         if res.get("code") != 0:
             raise Exception(res["message"])
 
+    def upload_documents(self,document_list: List[dict]):
+        url = f"/datasets/{self.id}/documents"
+        files = [("file",(ele["displayed_name"],ele["blob"])) for ele in document_list]
+        res = self.post(path=url,json=None,files=files)
+        res = res.json()
+        if res.get("code") == 0:
+            doc_list=[]
+            for doc in res["data"]:
+                document = Document(self.rag,doc)
+                doc_list.append(document)
+            return doc_list
+        raise Exception(res.get("message"))
 
-    def list_docs(self, keywords: Optional[str] = None, offset: int = 0, limit: int = -1) -> List[Document]:
-        """
-        List the documents in the dataset, optionally filtering by keywords, with pagination support.
-
-        Args:
-            keywords (Optional[str]): A string of keywords to filter the documents. Defaults to None.
-            offset (int): The starting point for pagination. Defaults to 0.
-            limit (int): The maximum number of documents to return. Defaults to -1 (no limit).
-
-        Returns:
-            List[Document]: A list of Document objects.
-        """
-        # Construct the request payload for listing documents
-        payload = {
-            "knowledgebase_id": self.id,
-            "keywords": keywords,
-            "offset": offset,
-            "limit": limit
-        }
-
-        # Send the request to the server to list documents
-        res = self.get(f'/doc/dataset/{self.id}/documents', payload)
-        res_json = res.json()
-
-        # Handle response and error checking
-        if res_json.get("retmsg") != "success":
-            raise Exception(res_json.get("retmsg"))
-
-        # Parse the document data from the response
+    def list_documents(self, id: str = None, keywords: str = None, offset: int =1, limit: int = 1024, orderby: str = "create_time", desc: bool = True):
+        res = self.get(f"/datasets/{self.id}/documents",params={"id": id,"keywords": keywords,"offset": offset,"limit": limit,"orderby": orderby,"desc": desc})
+        res = res.json()
         documents = []
-        for doc_data in res_json["data"].get("docs", []):
-            doc = Document(self.rag, doc_data)
-            documents.append(doc)
+        if res.get("code") == 0:
+            for document in res["data"].get("docs"):
+                documents.append(Document(self.rag,document))
+            return documents
+        raise Exception(res["message"])
 
-        return documents
+    def delete_documents(self,ids: List[str] = None):
+        res = self.rm(f"/datasets/{self.id}/documents",{"ids":ids})
+        res = res.json()
+        if res.get("code") != 0:
+            raise Exception(res["message"])
+
+    def async_parse_documents(self,document_ids):
+        res = self.post(f"/datasets/{self.id}/chunks",{"document_ids":document_ids})
+        res = res.json()
+        if res.get("code") != 0:
+            raise Exception(res.get("message"))
+
+    def async_cancel_parse_documents(self,document_ids):
+        res = self.rm(f"/datasets/{self.id}/chunks",{"document_ids":document_ids})
+        res = res.json()
+        if res.get("code") != 0:
+            raise Exception(res.get("message"))

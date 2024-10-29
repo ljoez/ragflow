@@ -24,7 +24,7 @@ from api.utils import get_uuid
 from api.utils.api_utils import get_error_data_result
 from api.utils.api_utils import get_result, token_required
 
-@manager.route('/chat/<chat_id>/session', methods=['POST'])
+@manager.route('/chats/<chat_id>/sessions', methods=['POST'])
 @token_required
 def create(tenant_id,chat_id):
     req = request.json
@@ -39,7 +39,7 @@ def create(tenant_id,chat_id):
         "message": [{"role": "assistant", "content": "Hi! I am your assistant，can I help you?"}]
     }
     if not conv.get("name"):
-        return get_error_data_result(retmsg="Name can not be empty.")
+        return get_error_data_result(retmsg="`name` can not be empty.")
     ConversationService.save(**conv)
     e, conv = ConversationService.get_by_id(conv["id"])
     if not e:
@@ -50,14 +50,10 @@ def create(tenant_id,chat_id):
     del conv["reference"]
     return get_result(data=conv)
 
-@manager.route('/chat/<chat_id>/session/<session_id>', methods=['PUT'])
+@manager.route('/chats/<chat_id>/sessions/<session_id>', methods=['PUT'])
 @token_required
 def update(tenant_id,chat_id,session_id):
     req = request.json
-    if "dialog_id" in req and req.get("dialog_id") != chat_id:
-        return get_error_data_result(retmsg="Can't change chat_id")
-    if "chat_id" in req and req.get("chat_id") != chat_id:
-        return get_error_data_result(retmsg="Can't change chat_id")
     req["dialog_id"] = chat_id
     conv_id = session_id
     conv = ConversationService.query(id=conv_id,dialog_id=chat_id)
@@ -66,23 +62,37 @@ def update(tenant_id,chat_id,session_id):
     if not DialogService.query(id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value):
         return get_error_data_result(retmsg="You do not own the session")
     if "message" in req or "messages" in req:
-        return get_error_data_result(retmsg="Message can not be change")
+        return get_error_data_result(retmsg="`message` can not be change")
     if "reference" in req:
-        return get_error_data_result(retmsg="Reference can not be change")
+        return get_error_data_result(retmsg="`reference` can not be change")
     if "name" in req and not req.get("name"):
-        return get_error_data_result(retmsg="Name can not be empty.")
+        return get_error_data_result(retmsg="`name` can not be empty.")
     if not ConversationService.update_by_id(conv_id, req):
         return get_error_data_result(retmsg="Session updates error")
     return get_result()
 
 
-@manager.route('/chat/<chat_id>/session/<session_id>/completion', methods=['POST'])
+@manager.route('/chats/<chat_id>/completions', methods=['POST'])
 @token_required
-def completion(tenant_id,chat_id,session_id):
+def completion(tenant_id,chat_id):
     req = request.json
     # req = {"conversation_id": "9aaaca4c11d311efa461fa163e197198", "messages": [
     #    {"role": "user", "content": "上海有吗？"}
     # ]}
+    if not req.get("session_id"):
+        conv = {
+            "id": get_uuid(),
+            "dialog_id": chat_id,
+            "name": req.get("name", "New session"),
+            "message": [{"role": "assistant", "content": "Hi! I am your assistant，can I help you?"}]
+        }
+        if not conv.get("name"):
+            return get_error_data_result(retmsg="`name` can not be empty.")
+        ConversationService.save(**conv)
+        e, conv = ConversationService.get_by_id(conv["id"])
+        session_id=conv.id
+    else:
+        session_id = req.get("session_id")
     if not req.get("question"):
         return get_error_data_result(retmsg="Please input your question.")
     conv = ConversationService.query(id=session_id,dialog_id=chat_id)
@@ -119,6 +129,7 @@ def completion(tenant_id,chat_id,session_id):
         conv.message[-1] = {"role": "assistant", "content": ans["answer"],
                             "id": message_id, "prompt": ans.get("prompt", "")}
         ans["id"] = message_id
+        ans["session_id"]=session_id
 
     def stream():
         nonlocal dia, msg, req, conv
@@ -129,7 +140,7 @@ def completion(tenant_id,chat_id,session_id):
             ConversationService.update_by_id(conv.id, conv.to_dict())
         except Exception as e:
             yield "data:" + json.dumps({"code": 500, "message": str(e),
-                                        "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
+                                        "data": {"answer": "**ERROR**: " + str(e),"reference": []}},
                                        ensure_ascii=False) + "\n\n"
         yield "data:" + json.dumps({"code": 0, "data": True}, ensure_ascii=False) + "\n\n"
 
@@ -150,7 +161,7 @@ def completion(tenant_id,chat_id,session_id):
             break
         return get_result(data=answer)
 
-@manager.route('/chat/<chat_id>/session', methods=['GET'])
+@manager.route('/chats/<chat_id>/sessions', methods=['GET'])
 @token_required
 def list(chat_id,tenant_id):
     if not DialogService.query(tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value):
@@ -163,7 +174,7 @@ def list(chat_id,tenant_id):
     page_number = int(request.args.get("page", 1))
     items_per_page = int(request.args.get("page_size", 1024))
     orderby = request.args.get("orderby", "create_time")
-    if request.args.get("desc") == "False":
+    if request.args.get("desc") == "False" or request.args.get("desc") == "false":
         desc = False
     else:
         desc = True
@@ -188,7 +199,7 @@ def list(chat_id,tenant_id):
                                 "content": chunk["content_with_weight"],
                                 "document_id": chunk["doc_id"],
                                 "document_name": chunk["docnm_kwd"],
-                                "knowledgebase_id": chunk["kb_id"],
+                                "dataset_id": chunk["kb_id"],
                                 "image_id": chunk["img_id"],
                                 "similarity": chunk["similarity"],
                                 "vector_similarity": chunk["vector_similarity"],
@@ -202,7 +213,7 @@ def list(chat_id,tenant_id):
         del conv["reference"]
     return get_result(data=convs)
 
-@manager.route('/chat/<chat_id>/session', methods=["DELETE"])
+@manager.route('/chats/<chat_id>/sessions', methods=["DELETE"])
 @token_required
 def delete(tenant_id,chat_id):
     if not DialogService.query(id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value):

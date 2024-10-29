@@ -18,11 +18,11 @@ class Base(object):
                     pr[name] = value
         return pr
 
-    def post(self, path, json, stream=False):
-        res = self.rag.post(path, json, stream=stream)
+    def post(self, path, json=None, stream=False, files=None):
+        res = self.rag.post(path, json, stream=stream,files=files)
         return res
 
-    def get(self, path, params):
+    def get(self, path, params=None):
         res = self.rag.get(path, params)
         return res
 
